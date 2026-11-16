@@ -1,0 +1,8 @@
+{
+  "name": " NEXORA Creator by Anil",
+  "description": "NEXORA — Ideas Into Innovation. AI-powered all-in-one content creation platform for blogs, YouTube scripts, social media, stories, and prompts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
