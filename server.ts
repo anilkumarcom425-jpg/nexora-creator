@@ -17,7 +17,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
-const MODEL_NAME = 'gemini-4-hydrogen';
+const MODEL_NAME = 'gemini-2.5-flash';
 
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -1698,7 +1698,7 @@ async function startServer() {
     console.log(`NEXORA Creator server listening on http://localhost:${PORT}`);
   });
 }
-
+export { app };
 startServer().catch((err) => {
   console.error('Failed to start NEXORA server:', err);
   process.exit(1);
