@@ -38,13 +38,10 @@ export class AIRequestError extends Error {
   }
 }
 
-// Netlify environment variable se seedha Gemini API key uthayega
 const apiKey = (import.meta.env.VITE_GEMINI_API_KEY as string) || '';
 const ai = new GoogleGenAI({ apiKey });
 
-export function resetClientRateGuards(): void {
-  // Client-side guard reset
-}
+export function resetClientRateGuards(): void {}
 
 export async function checkApiHealth(): Promise<HealthStatus> {
   return { status: 'healthy', timestamp: new Date().toISOString() };
@@ -72,9 +69,9 @@ export async function generateWithAI<T>(
   }
 
   try {
-    const modelName = scope === 'image' ? 'imagen-3.0-generate-002' : 'gemini-2.5-flash';
+    // Yahan model name ko gemini-3.8-flash kar diya hai
+    const modelName = scope === 'image' ? 'imagen-3.0-generate-002' : 'gemini-3.8-flash';
     
-    // Payload se prompt nikal kar Gemini ko bhejein
     const promptText = typeof payload.prompt === 'string' 
       ? payload.prompt 
       : JSON.stringify(payload);
@@ -100,8 +97,6 @@ export async function generateWithAI<T>(
     throw new AIRequestError(errorMessage, 'GEMINI_API_ERROR', 500, { scope, module: moduleId });
   }
 }
-
-// --- Saare Original Formatting Functions ---
 
 export function formatBlogAsText(blog: BlogResult): string {
   const parts: string[] = [
@@ -249,4 +244,4 @@ export function formatPromptAsText(p: PromptResult): string {
     p.variations.forEach((v, i) => lines.push(`${i + 1}. ${v}`));
   }
   return lines.join('\n');
-                                                                     }
+  }
