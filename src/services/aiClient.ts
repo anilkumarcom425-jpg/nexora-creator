@@ -73,16 +73,12 @@ export async function generateWithAI<T>(
     : JSON.stringify(payload);
 
   try {
-    const modelName = scope === 'image' ? 'imagen-3.0-generate-002' : 'gemini-2.5-flash';
+    // Yahan gemini-3.8-flash fix kar diya hai
+    const modelName = scope === 'image' ? 'imagen-3.0-generate-002' : 'gemini-3.8-flash';
     
-    // Speed aur performance ko fast karne ke liye configuration add ki hai
     const response = await ai.models.generateContent({
       model: modelName,
       contents: promptText,
-      config: {
-        temperature: 0.7,
-        maxOutputTokens: 2048,
-      }
     });
 
     const textResult = response.text;
@@ -247,4 +243,4 @@ export function formatPromptAsText(p: PromptResult): string {
     p.variations.forEach((v, i) => lines.push(`${i + 1}. ${v}`));
   }
   return lines.join('\n');
-      }
+    }
