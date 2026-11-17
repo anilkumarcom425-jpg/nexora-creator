@@ -68,34 +68,41 @@ export async function generateWithAI<T>(
     );
   }
 
-  try {
-    // Yahan model name ko gemini-3.8-flash kar diya hai
-    const modelName = scope === 'image' ? 'imagen-3.0-generate-002' : 'gemini-3.8-flash';
-    
-    const promptText = typeof payload.prompt === 'string' 
-      ? payload.prompt 
-      : JSON.stringify(payload);
+  const promptText = typeof payload.prompt === 'string' 
+    ? payload.prompt 
+    : JSON.stringify(payload);
 
-    const response = await ai.models.generateContent({
-      model: modelName,
-      contents: promptText,
-    });
+  // Models ki list - Agar pehla wala busy ya 503 dega, toh agla apne aap try ho jayega
+  const modelsToTry = scope === 'image' 
+    ? ['imagen-3.0-generate-002'] 
+    : ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'];
 
-    const textResult = response.text;
-    if (!textResult) {
-      throw new AIRequestError('No response received from Gemini AI.', 'EMPTY_RESPONSE', 500, { scope, module: moduleId });
-    }
+  let lastError: unknown = null;
 
+  for (const modelName of modelsToTry) {
     try {
-      const parsed = JSON.parse(textResult);
-      return parsed as T;
-    } catch {
-      return textResult as unknown as T;
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: promptText,
+      });
+
+      const textResult = response.text;
+      if (textResult) {
+        try {
+          return JSON.parse(textResult) as T;
+        } catch {
+          return textResult as unknown as T;
+        }
+      }
+    } catch (err: unknown) {
+      lastError = err;
+      // Agar 503 ya overload error hai, toh loop agle model par chala jayega bina user ko roke
+      continue;
     }
-  } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : 'Unknown AI generation error';
-    throw new AIRequestError(errorMessage, 'GEMINI_API_ERROR', 500, { scope, module: moduleId });
   }
+
+  const errorMessage = lastError instanceof Error ? lastError.message : 'Unknown AI generation error or high demand.';
+  throw new AIRequestError(errorMessage, 'GEMINI_API_ERROR', 500, { scope, module: moduleId });
 }
 
 export function formatBlogAsText(blog: BlogResult): string {
@@ -244,4 +251,4 @@ export function formatPromptAsText(p: PromptResult): string {
     p.variations.forEach((v, i) => lines.push(`${i + 1}. ${v}`));
   }
   return lines.join('\n');
-  }
+    }
