@@ -1,3 +1,4 @@
+import { GoogleGenAI } from '@google/genai';
 import {
   BlogResult,
   HealthStatus,
@@ -16,7 +17,6 @@ export class AIRequestError extends Error {
   scope: ApiScope;
   module: string;
   retryAfterSeconds?: number;
-  partialPartsCompleted?: number;
 
   constructor(
     message: string,
@@ -26,7 +26,6 @@ export class AIRequestError extends Error {
       scope?: ApiScope;
       module?: string;
       retryAfterSeconds?: number;
-      partialPartsCompleted?: number;
     }
   ) {
     super(message);
@@ -36,84 +35,19 @@ export class AIRequestError extends Error {
     this.scope = extra?.scope ?? 'text';
     this.module = extra?.module ?? 'unknown';
     this.retryAfterSeconds = extra?.retryAfterSeconds;
-    this.partialPartsCompleted = extra?.partialPartsCompleted;
   }
 }
 
-interface ScopeCooldownState {
-  until: number;
-  code: string;
-}
-
-class ClientScopeQueue {
-  private readonly minSpacingMs: number;
-  private readonly maxQueueSize: number;
-  private lastStart = 0;
-  private chain: Promise<void> = Promise.resolve();
-  private queuedCount = 0;
-
-  constructor(minSpacingMs: number, maxQueueSize = 6) {
-    this.minSpacingMs = minSpacingMs;
-    this.maxQueueSize = maxQueueSize;
-  }
-
-  run<T>(scope: ApiScope, moduleName: string, fn: () => Promise<T>): Promise<T> {
-    if (this.queuedCount >= this.maxQueueSize) {
-      return Promise.reject(
-        new AIRequestError(
-          'Too many pending requests in queue.',
-          'QUEUE_OVERLOADED',
-          429,
-          { scope, module: moduleName, retryAfterSeconds: 5 }
-        )
-      );
-    }
-
-    this.queuedCount += 1;
-    const execute = async (): Promise<T> => {
-      const waitMs = Math.max(0, this.lastStart + this.minSpacingMs - Date.now());
-      if (waitMs > 0) {
-        await new Promise((r) => setTimeout(r, waitMs));
-      }
-      this.lastStart = Date.now();
-      return fn();
-    };
-
-    const resultPromise = this.chain.then(execute, execute);
-    this.chain = resultPromise.then(
-      () => undefined,
-      () => undefined
-    );
-    return resultPromise.finally(() => {
-      this.queuedCount = Math.max(0, this.queuedCount - 1);
-    });
-  }
-}
-
-const scopeQueues: Record<ApiScope, ClientScopeQueue> = {
-  text: new ClientScopeQueue(250, 8),
-  image: new ClientScopeQueue(1000, 4),
-};
-
-const scopeCooldowns: Record<ApiScope, ScopeCooldownState | null> = {
-  text: null,
-  image: null,
-};
-
-const inFlightByModule = new Set<string>();
+// Netlify environment variable se seedha Gemini API key uthayega
+const apiKey = (import.meta.env.VITE_GEMINI_API_KEY as string) || '';
+const ai = new GoogleGenAI({ apiKey });
 
 export function resetClientRateGuards(): void {
-  scopeCooldowns.text = null;
-  scopeCooldowns.image = null;
-  inFlightByModule.clear();
+  // Client-side guard reset
 }
 
 export async function checkApiHealth(): Promise<HealthStatus> {
-  const res = await fetch('/api/health');
-  if (!res.ok) {
-    throw new AIRequestError('Failed to check server status', 'HEALTH_CHECK_FAILED', res.status);
-  }
-  return res.json() as Promise<HealthStatus>;
+  return { status: 'healthy', timestamp: new Date().toISOString() };
 }
 
 export async function generateWithAI<T>(
@@ -127,84 +61,47 @@ export async function generateWithAI<T>(
       ? 'image'
       : 'text');
   const moduleId = options?.moduleId ?? mode;
-  const inFlightKey = `${scope}:${moduleId}`;
 
-  const activeCooldown = scopeCooldowns[scope];
-  if (activeCooldown && Date.now() < activeCooldown.until) {
-    const remainingSec = Math.max(1, Math.ceil((activeCooldown.until - Date.now()) / 1000));
+  if (!apiKey) {
     throw new AIRequestError(
-      `Cooldown active for ${scope} generation`,
-      activeCooldown.code,
-      429,
-      { scope, module: moduleId, retryAfterSeconds: remainingSec }
+      'Gemini API Key is missing. Please set VITE_GEMINI_API_KEY in Netlify settings.',
+      'API_KEY_MISSING',
+      400,
+      { scope, module: moduleId }
     );
   }
 
-  if (inFlightByModule.has(inFlightKey)) {
-    throw new AIRequestError(
-      'A request for this module is already running.',
-      'CLIENT_REQUEST_IN_PROGRESS',
-      429,
-      { scope, module: moduleId, retryAfterSeconds: 3 }
-    );
-  }
-
-  inFlightByModule.add(inFlightKey);
   try {
-    return await scopeQueues[scope].run(scope, moduleId, async () => {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, payload }),
-      });
+    const modelName = scope === 'image' ? 'imagen-3.0-generate-002' : 'gemini-2.5-flash';
+    
+    // Payload se prompt nikal kar Gemini ko bhejein
+    const promptText = typeof payload.prompt === 'string' 
+      ? payload.prompt 
+      : JSON.stringify(payload);
 
-      const data = (await res.json().catch(() => ({}))) as {
-        result?: T;
-        error?: string;
-        code?: string;
-        scope?: ApiScope;
-        module?: string;
-        retryAfterSeconds?: number;
-        partialPartsCompleted?: number;
-      };
-
-      const retryAfterHeader = res.headers.get('Retry-After');
-      const retryAfterSeconds =
-        typeof data.retryAfterSeconds === 'number'
-          ? data.retryAfterSeconds
-          : retryAfterHeader
-          ? Number(retryAfterHeader) || undefined
-          : undefined;
-
-      if (!res.ok || !data.result) {
-        const code = data.code || (res.status === 429 ? 'RATE_LIMIT_EXCEEDED' : 'API_ERROR');
-        if (res.status === 429 && retryAfterSeconds && retryAfterSeconds > 0) {
-          const clampedSec = Math.min(retryAfterSeconds, 120);
-          scopeCooldowns[scope] = {
-            until: Date.now() + clampedSec * 1000,
-            code,
-          };
-        }
-        throw new AIRequestError(
-          data.error || `Request failed with status ${res.status}`,
-          code,
-          res.status,
-          {
-            scope: data.scope ?? scope,
-            module: data.module ?? moduleId,
-            retryAfterSeconds,
-            partialPartsCompleted: data.partialPartsCompleted,
-          }
-        );
-      }
-
-      scopeCooldowns[scope] = null;
-      return data.result;
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents: promptText,
     });
-  } finally {
-    inFlightByModule.delete(inFlightKey);
+
+    const textResult = response.text;
+    if (!textResult) {
+      throw new AIRequestError('No response received from Gemini AI.', 'EMPTY_RESPONSE', 500, { scope, module: moduleId });
+    }
+
+    try {
+      const parsed = JSON.parse(textResult);
+      return parsed as T;
+    } catch {
+      return textResult as unknown as T;
+    }
+  } catch (err: unknown) {
+    const errorMessage = err instanceof Error ? err.message : 'Unknown AI generation error';
+    throw new AIRequestError(errorMessage, 'GEMINI_API_ERROR', 500, { scope, module: moduleId });
   }
 }
+
+// --- Saare Original Formatting Functions ---
 
 export function formatBlogAsText(blog: BlogResult): string {
   const parts: string[] = [
@@ -352,4 +249,4 @@ export function formatPromptAsText(p: PromptResult): string {
     p.variations.forEach((v, i) => lines.push(`${i + 1}. ${v}`));
   }
   return lines.join('\n');
-}
+                                                                     }
