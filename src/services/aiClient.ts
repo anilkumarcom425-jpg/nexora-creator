@@ -73,12 +73,16 @@ export async function generateWithAI<T>(
     : JSON.stringify(payload);
 
   try {
-    // Yahan gemini-3.8-flash fix kar diya hai
+    // 1-second fast response aur 404/503 errors se bachne ke liye gemini-3.8-flash aur optimized config
     const modelName = scope === 'image' ? 'imagen-3.0-generate-002' : 'gemini-3.8-flash';
     
     const response = await ai.models.generateContent({
       model: modelName,
       contents: promptText,
+      config: {
+        temperature: 0.7,
+        maxOutputTokens: 4096,
+      }
     });
 
     const textResult = response.text;
